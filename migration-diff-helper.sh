@@ -140,6 +140,7 @@ for i in "${selected_files[@]}"; do
     source_file="$full_onprem_search_path/$selected_file"
     target_file="$full_cloud_search_path/$selected_file"
     echo "$source_file → $target_file"
+    mkdir -p "$(dirname "$target_file")"
     cp "$source_file" "$target_file"
 done
 
