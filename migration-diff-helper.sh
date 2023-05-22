@@ -71,7 +71,11 @@ find_opts=()
 if [ -f "$MIGRATION_IGNORE_FILE" ]; then
     readarray -t ignore_opts < "$MIGRATION_IGNORE_FILE"
     for ignore_opt in ${ignore_opts[@]}; do
-        find_opts+=(-o -name "$ignore_opt")
+        if (grep '/' <<< "$ignore_opt" >/dev/null); then
+            find_opts+=(-o -wholename "$ignore_opt")
+        else
+            find_opts+=(-o -name "$ignore_opt")
+        fi
     done
 fi
 
@@ -94,62 +98,85 @@ function stop_difftool_on_sigint() {
 
 trap stop_difftool_on_sigint SIGINT SIGHUP SIGTERM
 
-
-onprem_files=$(find "$full_onprem_search_path" -type f -iname "$filename_filter" -not '(' "${find_opts[@]:1}" ')' | sed "s#$full_onprem_search_path##" | sort)
-cloud_files=$(find "$full_cloud_search_path" -type f -iname "$filename_filter" -not '(' "${find_opts[@]:1}" ')' | sed "s#$full_cloud_search_path##" | sort)
+if [ -f "$MIGRATION_IGNORE_FILE" ]; then
+    onprem_files=$(find "$full_onprem_search_path" -type f -iname "$filename_filter" -not '(' "${find_opts[@]:1}" ')' | sed "s#$full_onprem_search_path##" | sort)
+    cloud_files=$(find "$full_cloud_search_path" -type f -iname "$filename_filter" -not '(' "${find_opts[@]:1}" ')' | sed "s#$full_cloud_search_path##" | sort)
+else
+    onprem_files=$(find "$full_onprem_search_path" -type f -iname "$filename_filter" | sed "s#$full_onprem_search_path##" | sort)
+    cloud_files=$(find "$full_cloud_search_path" -type f -iname "$filename_filter" | sed "s#$full_cloud_search_path##" | sort)
+fi
 
 files_diff=$(comm -23 <(echo "$onprem_files") <(echo "$cloud_files"))
 files_diff_formatted=$(awk '{ printf "(%s) %s\n", NR, $0}' <<< "$files_diff")
 
 proceed='n'
 
-while [ "$proceed" != "y" ]; do
+if [ -z "$files_diff" ]; then
+    echo "${GREEN}No new files detected!${NC}"
+else
+    while [ "$proceed" != "y" ]; do
 
-    echo "${RED}New files that are NOT in the Cloud installation:${NC}"
-    echo ""
-    echo "$files_diff_formatted"
-    echo
-    echo "${BLUE}Select which files to copy over to the cloud installation:${NC}"
-    echo "Use comma-separated list, you can also use ranges (e.g. 2,3,5-10)"
-    echo -n "Files to copy> "
-    read -a numbers_input
+        echo "${RED}New files that are NOT in the Cloud installation:${NC}"
+        echo ""
+        echo "$files_diff_formatted"
+        echo
+        echo "${BLUE}Select which files to copy over to the cloud installation:${NC}"
+        echo "Use comma-separated list, you can also use ranges (e.g. 2,3,5-10)"
+        echo -n "Files to copy> "
+        read -a numbers_input
 
-    selected_files=()
+        selected_files=()
 
-    for range in $(echo "$numbers_input" | sed "s/,/ /g"); do
-        _st=$(echo "$range" | cut -d'-' -f1)
-        _en=$(echo "$range" | cut -d'-' -f2)
-        for (( i=_st ; i <= _en ; i++ )); do
-            selected_files+=($i)
+        for range in $(echo "$numbers_input" | sed "s/,/ /g"); do
+            _st=$(echo "$range" | cut -d'-' -f1)
+            _en=$(echo "$range" | cut -d'-' -f2)
+            for (( i=_st ; i <= _en ; i++ )); do
+                selected_files+=($i)
+            done
         done
+
+        echo "Please confirm your selection:"
+        echo
+        for i in "${selected_files[@]}"; do
+            echo "$files_diff_formatted" | sed "${i}q;d"
+        done
+        echo "Is this right? (y/n): "
+        read proceed
+        continue
     done
 
-    echo "Please confirm your selection:"
+    read -p "Do you want to add the unselected files to the .migration_ignore file? (y/n)> " ignore_other_files 
+    if [ "$ignore_other_files" == "y" ]; then
+        _selected="${selected_files[@]}"
+        unselected=()
+        ind=1
+        while read -r different_file; do
+            if (grep -vP "([^\w]|^)$ind([^\w]|$)" <<< "$_selected" >/dev/null); then
+                echo "Adding '$different_file' to .migration_ignore"
+                echo "*/$path_prefix/$different_file" | tr -s '/' >> "$MIGRATION_IGNORE_FILE"
+            fi
+            ind=$(($ind + 1))
+        done < <(echo "$files_diff")
+    fi
+
     echo
+    echo "Copying files..."
     for i in "${selected_files[@]}"; do
-        echo "$files_diff_formatted" | sed "${i}q;d"
+        selected_file=$(echo "$files_diff" | sed "${i}q;d")
+        source_file="$full_onprem_search_path/$selected_file"
+        target_file="$full_cloud_search_path/$selected_file"
+        echo "$source_file → $target_file"
+        mkdir -p "$(dirname "$target_file")"
+        cp "$source_file" "$target_file"
     done
-    echo "Is this right? (y/n): "
-    read proceed
-    continue
-done
 
-echo "Copying files..."
-for i in "${selected_files[@]}"; do
-    selected_file=$(echo "$files_diff" | sed "${i}q;d")
-    source_file="$full_onprem_search_path/$selected_file"
-    target_file="$full_cloud_search_path/$selected_file"
-    echo "$source_file → $target_file"
-    mkdir -p "$(dirname "$target_file")"
-    cp "$source_file" "$target_file"
-done
-
-echo
-echo "${GREEN}Copying new files - done!${NC}"
+    echo
+    echo "${GREEN}Copying new files - done!${NC}"
+fi
 echo
 echo "${BLUE}Generating files diffs...${NC}"
 
-MIGRATION_INDEX_FILE="$onprem_base_dir/.last_migration"
+MIGRATION_INDEX_FILE="$onprem_base_dir/$path_prefix/.last_migration"
 onprem_git_head=$(git --git-dir="$onprem_base_dir/.git" rev-parse HEAD)
 
 if [ -f "$MIGRATION_INDEX_FILE" ]; then
