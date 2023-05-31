@@ -31,6 +31,16 @@ CYAN=$'\e[0;36m'
 GREY=$'\e[0;90m'
 NC=$'\e[0m'
 
+unameRes=$(uname -s)
+case "$unameRes" in
+    Darwin*) isMac=1;;
+    *)       isMac=0;;
+esac
+
+if [ "$isMac" == "1" ]; then
+    echo "${YELLOW}Mac detected!$NC"
+fi
+
 if [ -z "$DIFF_TOOL_CMD" ]; then
     DIFF_TOOL_CMD="{onprem_file} {cloud_file}"
 fi
@@ -201,7 +211,11 @@ if [ -f "$MIGRATION_INDEX_FILE" ]; then
         done
 
         # echo "${CYAN}[DEBUG] Checking if '$file_to_check' is different...${NC}"
-        _DIFF=$(comm --nocheck-order -3 "$source_file" "$target_file")
+        if [ "$isMac" == "1" ]; then
+            _DIFF=$(comm -3 "$source_file" "$target_file")
+        else
+            _DIFF=$(comm --nocheck-order -3 "$source_file" "$target_file")
+        fi
         # echo -e "${CYAN}[DEBUG] _DIFF is: \n$_DIFF${NC}"
     
         if [ ! -z "$_DIFF" ]; then
@@ -238,7 +252,7 @@ if [ -f "$MIGRATION_INDEX_FILE" ]; then
             fi
         done
 
-        sed -i "s/$last_git_head/$onprem_git_head/" "$MIGRATION_INDEX_FILE"
+        sed -i -- "s/$last_git_head/$onprem_git_head/" "$MIGRATION_INDEX_FILE"
         echo "${BLUE}Updated the last migrated commit to be '$onprem_git_head'$NC"
     fi
 
@@ -267,7 +281,7 @@ if [ -f "$MIGRATION_INDEX_FILE" ]; then
                 wait $DIFF_TOOL_PID
 
                 if [ "$?" -eq "0" ]; then
-                    sed -i "\#${file_to_diff}#d" "$MIGRATION_INDEX_FILE"
+                    sed -i -- "\#${file_to_diff}#d" "$MIGRATION_INDEX_FILE"
                     echo "Finished merging $file_to_diff"
                 else
                     echo "${RED}Couldn't diff $file_to_diff${NC}"
@@ -299,7 +313,11 @@ else # First time running the script
         done
 
         # echo "${CYAN}[DEBUG] Checking if '$file_to_check' is different...${NC}"
-        _DIFF=$(comm --nocheck-order -3 "$source_file" "$target_file")
+        if [ "$isMac" == "1" ]; then
+            _DIFF=$(comm -3 "$source_file" "$target_file")
+        else
+            _DIFF=$(comm --nocheck-order -3 "$source_file" "$target_file")
+        fi
         # echo -e "${CYAN}[DEBUG] _DIFF is: \n$_DIFF${NC}"
     
         if [ ! -z "$_DIFF" ]; then
@@ -324,7 +342,7 @@ else # First time running the script
         command_to_run="$DIFF_TOOL_BIN "$(echo -n "$DIFF_TOOL_CMD" | sed "s#{onprem_file}#$source_file#" | sed "s#{cloud_file}#$target_file#")
         eval "$command_to_run"
         if [ "$?" -eq "0" ]; then
-            sed -i "\#${file_to_diff}#d" "$MIGRATION_INDEX_FILE"
+            sed -i -- "\#${file_to_diff}#d" "$MIGRATION_INDEX_FILE"
         else
             echo "${RED}Couldn't diff $file_to_diff${NC}"
         fi
